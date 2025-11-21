@@ -88,14 +88,19 @@ async def predict(
     return JSONResponse(wrapped)
 
 
-@app.get("/latest/{device_id}")
-def get_latest(device_id: str):
+@app.get("/latest/emotion")
+def get_latest_emotion():
     """
-    Dashboard gọi để lấy kết quả mới nhất của một device_id.
+    Dashboard gọi để lấy kết quả cảm xúc mới nhất (không cần device_id).
+    Nếu có nhiều ESP32 thì sẽ lấy kết quả cuối cùng hệ thống nhận được.
     """
-    if device_id not in device_results:
-        raise HTTPException(status_code=404, detail="No result for this device yet")
-    return device_results[device_id]
+    if not device_results:
+        raise HTTPException(status_code=404, detail="No result yet")
+
+    # Lấy kết quả mới nhất theo timestamp
+    latest = max(device_results.values(), key=lambda x: x["timestamp"])
+    return latest
+
 
 
 if __name__ == "__main__":
