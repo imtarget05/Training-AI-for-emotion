@@ -19,11 +19,14 @@ Hệ thống hoạt động theo mô hình Client-Server monolith nhỏ gọn nh
 - **Backend (API Server)**: Sử dụng Python + framework **FastAPI**. Chịu trách nhiệm cung cấp REST API và dịch vụ WebSocket Server. Tích hợp PyTorch để thực hiện inference nhận diện ảnh.
 - **Frontend (Dashboard)**: SPA (Single Page Application) sử dụng Vanilla HTML/CSS/JS (nằm gọn trong file `static/index.html`). Đảm nhiệm việc kết nối WebSocket, lấy camera frame, render biểu đồ xác suất và vẽ bounding box nhận diện trực tiếp.
 
-### Luồng xử lý Real-time (WebSocket):
-1. Trình duyệt (Browser Client) lấy frame từ Webcam, encode thành dạng Base64 JPEG.
-2. Gửi ảnh liên tục lên Backend thông qua kết nối **WebSocket** (để giảm độ trễ so với HTTP).
-3. Backend nhận frame, decode ảnh, sử dụng Haar Cascade phát hiện mặt, crop và đưa vào mô hình AI xử lý.
-4. JSON kết quả bao gồm nhãn cảm xúc, độ tin cậy, bounding box tọa độ mặt được trả ngược về cho Client để cập nhật giao diện ngay lập tức.
+### 3.1 Sơ đồ kiến trúc tổng thể (Overall Architecture)
+![Sơ đồ kiến trúc tổng thể](image/architecture.png)
+
+### 3.2 Luồng Inference (Inference Flow)
+![Luồng Inference](image/inference_flow.png)
+
+### 3.3 Luồng dữ liệu Real-time qua WebSocket (Real-time Data Flow)
+![Luồng dữ liệu Real-time qua WebSocket](image/websocket_flow.png)
 
 ## 4. How to Run (Hướng dẫn cài đặt & khởi chạy)
 
