@@ -3,6 +3,9 @@ import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as transforms
 from PIL import Image
+import cv2
+import numpy as np
+import os
 
 # ================== Kiến trúc Encoder & Classifier ==================
 
@@ -64,6 +67,17 @@ CLASS_NAMES = [
     "Neutral",
 ]
 
+# Emoji mapping cho từng cảm xúc
+EMOTION_EMOJIS = {
+    "Surprise": "😲",
+    "Fear": "😨",
+    "Disgust": "🤢",
+    "Happiness": "😊",
+    "Sadness": "😢",
+    "Anger": "😠",
+    "Neutral": "😐",
+}
+
 # Chỉnh lại cho đúng với lúc train (nếu bạn dùng resize/normalize khác thì sửa ở đây)
 inference_transform = transforms.Compose(
     [
@@ -76,6 +90,10 @@ inference_transform = transforms.Compose(
     ]
 )
 
+# Load Haar Cascade cho face detection
+CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
+
 
 def load_model(weights_path: str) -> FinetuneClassifier:
     """
@@ -84,7 +102,7 @@ def load_model(weights_path: str) -> FinetuneClassifier:
     encoder = ResNetEncoder(architecture="resnet50", pretrained=False)
     model = FinetuneClassifier(encoder, num_classes=len(CLASS_NAMES))
 
-    state_dict = torch.load(weights_path, map_location=device)
+    state_dict = torch.load(weights_path, map_location=device, weights_only=True)
 
     # Xử lý trường hợp state_dict được lưu với DataParallel (module.xxx)
     new_state_dict = {}
@@ -99,6 +117,23 @@ def load_model(weights_path: str) -> FinetuneClassifier:
     model.to(device)
     model.eval()
     return model
+
+
+def detect_faces(img_np: np.ndarray):
+    """
+    Detect faces using OpenCV Haar Cascade.
+    Input: numpy array BGR (from cv2) or RGB
+    Returns: list of (x, y, w, h) tuples
+    """
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    faces = face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(48, 48),
+        flags=cv2.CASCADE_SCALE_IMAGE,
+    )
+    return faces if len(faces) > 0 else []
 
 
 def predict_image(model: FinetuneClassifier, img: Image.Image):
@@ -127,7 +162,48 @@ def predict_image(model: FinetuneClassifier, img: Image.Image):
     return {
         "label": label,
         "confidence": confidence,
+        "emoji": EMOTION_EMOJIS.get(label, ""),
         "probs": {
             CLASS_NAMES[i]: float(probs[i]) for i in range(len(CLASS_NAMES))
         },
     }
+
+
+def predict_frame(model: FinetuneClassifier, img_np: np.ndarray):
+    """
+    Nhận numpy array (RGB), detect faces, predict emotion cho mỗi face.
+    Trả về list các kết quả, mỗi kết quả gồm:
+    {
+      "face": {"x": int, "y": int, "w": int, "h": int},
+      "label": str,
+      "confidence": float,
+      "emoji": str,
+      "probs": {label: prob, ...}
+    }
+    """
+    faces = detect_faces(img_np)
+    results = []
+
+    if len(faces) == 0:
+        # Không tìm thấy face → predict toàn ảnh
+        pil_img = Image.fromarray(img_np)
+        result = predict_image(model, pil_img)
+        h, w = img_np.shape[:2]
+        result["face"] = {"x": 0, "y": 0, "w": w, "h": h}
+        results.append(result)
+    else:
+        for (x, y, w, h) in faces:
+            # Mở rộng bounding box 1 chút cho tự nhiên hơn
+            pad = int(0.1 * max(w, h))
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = min(img_np.shape[1], x + w + pad)
+            y2 = min(img_np.shape[0], y + h + pad)
+
+            face_crop = img_np[y1:y2, x1:x2]
+            pil_face = Image.fromarray(face_crop)
+            result = predict_image(model, pil_face)
+            result["face"] = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+            results.append(result)
+
+    return results

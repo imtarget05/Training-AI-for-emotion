@@ -1,0 +1,28 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# macOS metadata
+.DS_Store
+._*
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Env files
+.env
+.env.*
+
+# NOTE: Không ignore file model .pth (cần cho inference)
+# KHÔNG thêm: *.pt, *.pth, *.ptl
