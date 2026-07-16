@@ -24,5 +24,11 @@ env/
 .env
 .env.*
 
+# SQLite database (runtime artifact)
+emotion_data.db
+
+# Generated HTML reports
+reports/
+
 # NOTE: Không ignore file model .pth (cần cho inference)
 # KHÔNG thêm: *.pt, *.pth, *.ptl

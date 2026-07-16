@@ -181,6 +181,52 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       </div>
     </div>
   </div>
+
+  <!-- Reports & Analytics Section (AI Data Automation & BI Dashboard) -->
+  <div class="card" style="margin-top:28px">
+    <div class="card-header" style="display:flex;align-items:center;flex-wrap:wrap;gap:12px">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      <h2>BI Reports & Data Automation</h2>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-outline" style="padding:6px 12px;font-size:.8rem" onclick="seedDataAndRefresh()">🌱 Seed Data</button>
+        <button class="btn btn-outline" style="padding:6px 12px;font-size:.8rem" onclick="refreshReports()">🔄 Tải lại</button>
+        <a href="/reports/export-csv" class="btn btn-primary" style="padding:6px 12px;font-size:.8rem;text-decoration:none;display:inline-flex;align-items:center">📥 Xuất CSV</a>
+      </div>
+    </div>
+    <div class="card-body">
+      <!-- KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px">
+        <div style="background:var(--surface2);padding:16px;border-radius:10px;border:1px solid var(--border)">
+          <div style="font-size:.75rem;color:var(--text3);text-transform:uppercase;font-weight:600">Tổng số lượt nhận diện</div>
+          <div style="font-size:1.8rem;font-weight:800;margin-top:4px" id="kpiTotal">0</div>
+        </div>
+        <div style="background:var(--surface2);padding:16px;border-radius:10px;border:1px solid var(--border)">
+          <div style="font-size:.75rem;color:var(--text3);text-transform:uppercase;font-weight:600">Độ tin cậy trung bình</div>
+          <div style="font-size:1.8rem;font-weight:800;margin-top:4px;color:var(--green)" id="kpiConf">0.0%</div>
+        </div>
+        <div style="background:var(--surface2);padding:16px;border-radius:10px;border:1px solid var(--border)">
+          <div style="font-size:.75rem;color:var(--text3);text-transform:uppercase;font-weight:600">Thiết bị đã kết nối</div>
+          <div style="font-size:1.8rem;font-weight:800;margin-top:4px" id="kpiDevices">0</div>
+        </div>
+      </div>
+
+      <!-- Tables -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px">
+        <div>
+          <h3 style="font-size:0.95rem;font-weight:600;margin-bottom:12px;color:var(--text2)">📊 Phân bố cảm xúc tích lũy</h3>
+          <div style="max-height:220px;overflow-y:auto" id="reportDist">
+            <div class="empty-state"><p>Chưa có dữ liệu</p></div>
+          </div>
+        </div>
+        <div>
+          <h3 style="font-size:0.95rem;font-weight:600;margin-bottom:12px;color:var(--text2)">🔌 Hiệu suất thiết bị</h3>
+          <div style="max-height:220px;overflow-y:auto" id="reportDevices">
+            <div class="empty-state"><p>Chưa có dữ liệu</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -347,6 +393,76 @@ function setStatus(active,text){
   document.getElementById('statusDot').className='status-dot'+(active?' active':'');
   document.getElementById('statusText').textContent=text;
 }
+
+async function refreshReports() {
+  try {
+    const [distRes, confRes, devRes] = await Promise.all([
+      fetch('/reports/emotion-distribution').then(r => r.json()),
+      fetch('/reports/confidence-stats').then(r => r.json()),
+      fetch('/reports/devices').then(r => r.json())
+    ]);
+
+    document.getElementById('kpiTotal').textContent = distRes.total_predictions || 0;
+    document.getElementById('kpiConf').textContent = confRes.avg_confidence
+      ? (confRes.avg_confidence * 100).toFixed(1) + '%'
+      : '0.0%';
+    document.getElementById('kpiDevices').textContent = Object.keys(devRes.devices || {}).length;
+
+    // Emotion distribution table
+    const distContainer = document.getElementById('reportDist');
+    if (distRes.total_predictions > 0) {
+      let html = '<table style="width:100%;border-collapse:collapse;font-size:.85rem">';
+      html += '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px">Cảm xúc</th><th style="text-align:right;padding:8px">Số lượng</th><th style="text-align:right;padding:8px">Tỷ lệ</th></tr></thead><tbody>';
+      for (const [name, data] of Object.entries(distRes.percentages)) {
+        const info = EMOTIONS[name] || {emoji:'❓'};
+        html += `<tr style="border-bottom:1px solid var(--glass)">
+          <td style="padding:8px">${info.emoji} ${name}</td>
+          <td style="text-align:right;padding:8px">${data.count}</td>
+          <td style="text-align:right;padding:8px;font-weight:600;color:var(--accent)">${data.percentage}%</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      distContainer.innerHTML = html;
+    } else {
+      distContainer.innerHTML = '<div class="empty-state"><p>Chưa có dữ liệu lịch sử</p></div>';
+    }
+
+    // Device stats table
+    const devContainer = document.getElementById('reportDevices');
+    const devices = Object.entries(devRes.devices || {});
+    if (devices.length > 0) {
+      let html = '<table style="width:100%;border-collapse:collapse;font-size:.85rem">';
+      html += '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px">Thiết bị</th><th style="text-align:right;padding:8px">Lượt check</th><th style="text-align:right;padding:8px">Conf TB</th></tr></thead><tbody>';
+      for (const [devId, stats] of devices) {
+        html += `<tr style="border-bottom:1px solid var(--glass)">
+          <td style="padding:8px;font-family:monospace;font-size:.8rem">${devId}</td>
+          <td style="text-align:right;padding:8px">${stats.total_predictions}</td>
+          <td style="text-align:right;padding:8px;color:var(--green)">${(stats.avg_confidence * 100).toFixed(1)}%</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      devContainer.innerHTML = html;
+    } else {
+      devContainer.innerHTML = '<div class="empty-state"><p>Chưa có dữ liệu thiết bị</p></div>';
+    }
+  } catch (err) {
+    console.error('Failed to load reports:', err);
+  }
+}
+
+async function seedDataAndRefresh() {
+  try {
+    const res = await fetch('/reports/seed', {method:'POST'});
+    const data = await res.json();
+    alert(`Seeded ${data.seeded_records} sample records.`);
+    await refreshReports();
+  } catch (e) {
+    alert('Seed failed. Make sure server is running.');
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => { setTimeout(refreshReports, 800); });
+setInterval(refreshReports, 15000);
 </script>
 </body>
 </html>

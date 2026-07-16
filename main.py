@@ -15,6 +15,15 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 import uvicorn
 
+from database import (
+    init_db,
+    save_prediction,
+    get_emotion_distribution,
+    get_confidence_statistics,
+    get_daily_summary,
+    get_device_stats,
+    get_predictions,
+)
 from model import load_model, predict_image, predict_frame
 
 WEIGHTS_PATH = "final_model.pth"
@@ -39,6 +48,12 @@ device_results: Dict[str, Dict[str, Any]] = {}
 
 # Lazy-load model để /docs mở nhanh, chỉ load khi gọi /predict lần đầu
 model = None
+
+
+# Initialize database on startup
+@app.on_event("startup")
+def startup_event():
+    init_db()
 
 
 def get_model():
@@ -100,6 +115,19 @@ async def predict(
 
     # Lưu kết quả mới nhất của device cho dashboard đọc
     device_results[device_id] = wrapped
+
+    # Lưu vào database
+    try:
+        save_prediction(
+            device_id=device_id,
+            timestamp=wrapped["timestamp"],
+            emotion=result["label"],
+            confidence=result["confidence"],
+            probs=result.get("probs", {}),
+            face_detected=True,
+        )
+    except Exception as e:
+        print("⚠️ Failed to save prediction to DB:", e)
 
     return JSONResponse(wrapped)
 
@@ -174,6 +202,20 @@ async def websocket_camera(websocket: WebSocket):
                         **results[0],  # Lấy kết quả face đầu tiên
                     }
 
+                    # Lưu mỗi face vào database (giới hạn 3 để tránh quá tải)
+                    for r in results[:3]:
+                        try:
+                            save_prediction(
+                                device_id="webcam",
+                                timestamp=response["timestamp"],
+                                emotion=r["label"],
+                                confidence=r["confidence"],
+                                probs=r.get("probs", {}),
+                                face_detected=True,
+                            )
+                        except Exception:
+                            pass
+
                 await websocket.send_json(response)
 
             except Exception as e:
@@ -183,7 +225,141 @@ async def websocket_camera(websocket: WebSocket):
         print("📷 WebSocket client disconnected")
 
 
+# ============== Reporting & Statistics API ==============
+
+
+@app.get("/reports/emotion-distribution")
+def report_emotion_distribution(
+    device_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
+    """Báo cáo phân bố cảm xúc theo số lượng và phần trăm."""
+    data = get_emotion_distribution(
+        device_id=device_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    total = sum(data.values()) if data else 0
+    percentages = (
+        {k: {"count": v, "percentage": round(v / total * 100, 2)} for k, v in data.items()}
+        if total > 0
+        else {}
+    )
+    return {"distribution": data, "total_predictions": total, "percentages": percentages}
+
+
+@app.get("/reports/confidence-stats")
+def report_confidence_stats(
+    emotion: str | None = None,
+    device_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
+    """Thống kê độ tin cậy: avg/min/max."""
+    return get_confidence_statistics(
+        emotion=emotion,
+        device_id=device_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@app.get("/reports/daily-summary")
+def report_daily_summary(
+    device_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
+    """Báo cáo tổng hợp theo ngày (30 ngày gần nhất)."""
+    data = get_daily_summary(device_id=device_id, start_date=start_date, end_date=end_date)
+    return {"daily_summary": data, "days": len(data)}
+
+
+@app.get("/reports/devices")
+def report_devices():
+    """Thống kê theo từng thiết bị."""
+    return {"devices": get_device_stats()}
+
+
+@app.get("/reports/predictions")
+def report_predictions(
+    device_id: str | None = None,
+    emotion: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Danh sách các lần nhận diện với bộ lọc."""
+    data = get_predictions(
+        device_id=device_id,
+        emotion=emotion,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        offset=offset,
+    )
+    return {"predictions": data, "count": len(data), "limit": limit, "offset": offset}
+
+
+@app.get("/reports/export-csv")
+def export_csv(
+    device_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
+    """Xuất dữ liệu CSV để phân tích trong Excel/BI tool."""
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    data = get_predictions(device_id=device_id, start_date=start_date, end_date=end_date, limit=10000)
+    if not data:
+        raise HTTPException(status_code=404, detail="No data to export")
+
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=["id", "device_id", "timestamp", "emotion", "confidence", "created_at"],
+    )
+    writer.writeheader()
+    for row in data:
+        writer.writerow({k: row[k] for k in ["id", "device_id", "timestamp", "emotion", "confidence", "created_at"]})
+
+    output.seek(0)
+    filename = f"emotion_report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.post("/reports/seed")
+def seed_sample_data(num_records: int = 100):
+    """Tự động thêm dữ liệu mẫu để demo báo cáo/bảng điều khiển."""
+    from automation import generate_sample_data
+    saved = generate_sample_data(num_records)
+    return {"status": "ok", "seeded_records": saved}
+
+
+@app.post("/reports/generate-html")
+def trigger_daily_report():
+    """Kích hoạt tự động hóa xuất báo cáo HTML."""
+    from automation import generate_daily_report
+    path = generate_daily_report()
+    return {"status": "ok", "report_path": path}
+
+
 # ============== Serve Dashboard ==============
+
+# Đảm bảo thư mục reports tồn tại và serve HTML reports
+import os as _os
+if not _os.path.exists("reports"):
+    _os.makedirs("reports")
+app.mount("/reports-html", StaticFiles(directory="reports"), name="reports_html")
+
 
 # Mount static files SAU tất cả routes để không override
 app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")
