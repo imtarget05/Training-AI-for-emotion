@@ -257,6 +257,19 @@ docker compose up --build
 python scripts/demo_e2e.py --base http://localhost:8000
 ```
 
+### Portfolio / interview pack
+
+| Doc | Purpose |
+|---|---|
+| `PORTFOLIO_SUMMARY.md` | One-liner, resume bullets, metrics, 30-sec architecture pitch |
+| `INTERVIEW_PREPARATION.md` | 20-question answer bank (ML, GenAI, MLOps, behavior) |
+| `PROJECT_PRESENTATION.md` | 3–5 min talk track + demo script + limitations slide |
+| `DEMO_SCRIPT.md` | Step-by-step live / fallback demo scenarios |
+| `VALIDATION_REPORT.md` | Full evidence: metrics, tests, MLflow, deps |
+| `CLOUD_LLM_VALIDATION_REPORT.md` | Real Cloudflare Workers AI 8-case matrix |
+| `FINAL_REPOSITORY_AUDIT.md` | Architecture + known limits audit |
+| `DATASET.md` | FER2013 provenance, mapping, conversion |
+| `DEPLOYMENT_RUNBOOK.md` | Operator steps: Neon → Koyeb → Pages → live checks |
 ## 11. Limitations
 
 * Emotion recognition is **probabilistic**; a facial expression is not proof

@@ -45,3 +45,5 @@ Fear recall ≈ 0.046 — the model almost never detects fear. Gating reduces no
 3. Streak/cooldown trade-offs: latency vs. noise vs. UX
 4. Mock vs real inference separation in the test suite
 5. What "emotion-aware intervention" means — and why I don't call it adaptive learning or diagnosis
+Deep-dive answer bank: `INTERVIEW_PREPARATION.md`.
+Presentation copy (incl. 5-min talk track): `PROJECT_PRESENTATION.md`.
