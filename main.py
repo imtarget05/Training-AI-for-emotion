@@ -1,8 +1,7 @@
-import asyncio
 import base64
-import json
-import time
-from datetime import datetime
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict
 
@@ -15,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 import uvicorn
 
+from pydantic import BaseModel
+
 from database import (
     init_db,
     save_prediction,
@@ -23,21 +24,45 @@ from database import (
     get_daily_summary,
     get_device_stats,
     get_predictions,
+    save_tutor_feedback,
+    get_tutor_feedback_history,
 )
-from model import load_model, predict_image, predict_frame
+from model import get_model_info, load_model, predict_image, predict_frame
+from tutor import generate_tutor_feedback
+from tutor_trigger import (
+    update_streak_and_should_trigger,
+    recent_emotion_trend,
+)
 
-WEIGHTS_PATH = "final_model.pth"
+# Private aliases (kept for call-site readability) — logic lives in tutor_trigger.py
+_update_streak_and_should_trigger = update_streak_and_should_trigger
+_recent_emotion_trend = recent_emotion_trend
+
+WEIGHTS_PATH = os.environ.get("WEIGHTS_PATH", "final_model.pth")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Initialize the SQLite database (schema + indexes) on startup."""
+    init_db()
+    yield
+
 
 app = FastAPI(
-    title="Emotion Recognition API",
-    description="API nhận diện cảm xúc khuôn mặt từ ảnh & camera real-time.",
-    version="2.0.0",
+    title="Emotion-Aware AI Learning Assistant API",
+    description=(
+        "Nhận diện cảm xúc khuôn mặt real-time (ResNet50 + OpenCV Haar) kết hợp "
+        "AI Tutor (Cloudflare Workers AI) sinh phản hồi học tập khi phát hiện cảm xúc tiêu cực kéo dài."
+    ),
+    version="2.1.0",
+    lifespan=lifespan,
 )
 
-# Cho phép call từ dashboard (domain khác)
+# Cho phép call từ dashboard (domain khác). Giới hạn origin qua CORS_ORIGINS
+# khi deploy production (vd: https://your-frontend.pages.dev).
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # sau này có thể giới hạn domain
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,17 +74,22 @@ device_results: Dict[str, Dict[str, Any]] = {}
 # Lazy-load model để /docs mở nhanh, chỉ load khi gọi /predict lần đầu
 model = None
 
+# ====== AI Tutor: sustained-emotion tracking ======
+# Trigger logic (streak + cooldown, per device) lives in tutor_trigger.py
+# so it can be unit-tested without the CV pipeline. Only support-needed
+# emotions that repeat TUTOR_STREAK_THRESHOLD frames trigger the LLM.
+
 
 # Initialize database on startup
-@app.on_event("startup")
-def startup_event():
-    init_db()
+# (handled by `lifespan` above — keeps uvicorn + TestClient in sync)
 
 
 def get_model():
     global model
     if model is None:
-        print("⏳ Loading model weights from:", WEIGHTS_PATH)
+        _info = get_model_info()
+        print(f"⏳ Loading model {_info['model_name']} version {_info['model_version']} "
+              f"({_info['architecture']}, git {_info['git_commit'] or 'n/a'}) from {WEIGHTS_PATH}")
         model_local = load_model(WEIGHTS_PATH)
         model = model_local
         print("✅ Model loaded successfully.")
@@ -69,19 +99,34 @@ def get_model():
 # ============== REST API Endpoints ==============
 
 
+@app.get("/health")
+def health():
+    """Liveness probe cho deployment (Render/Koyeb/...): không load model, luôn nhanh."""
+    return {"status": "ok"}
+
+
 @app.get("/")
 def root():
     return {
         "status": "ok",
-        "message": "Emotion Recognition API v2.0",
+        "message": "Emotion-Aware AI Learning Assistant API v2.1.0",
         "endpoints": {
             "dashboard": "/dashboard",
             "predict_image": "POST /predict",
             "latest_emotion": "GET /latest/emotion",
             "websocket": "WS /ws/camera",
+            "tutor_feedback_on_demand": "POST /tutor/feedback",
+            "tutor_history": "GET /tutor/history",
+            "model_info": "GET /info",
             "docs": "/docs",
         },
     }
+
+
+@app.get("/info")
+def model_info_endpoint():
+    """Non-sensitive identity of the active model (MLOps / model versioning)."""
+    return get_model_info()
 
 
 @app.post("/predict")
@@ -109,7 +154,7 @@ async def predict(
 
     wrapped = {
         "device_id": device_id,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         **result,
     }
 
@@ -128,6 +173,29 @@ async def predict(
         )
     except Exception as e:
         print("⚠️ Failed to save prediction to DB:", e)
+
+    # AI Tutor: chỉ trigger khi cảm xúc "cần hỗ trợ" lặp lại liên tiếp
+    if _update_streak_and_should_trigger(device_id, result["label"]):
+        try:
+            trend = _recent_emotion_trend(device_id)
+            feedback = await generate_tutor_feedback(
+                emotion=result["label"],
+                confidence=result["confidence"],
+                trend=trend,
+            )
+            save_tutor_feedback(
+                device_id=device_id,
+                timestamp=wrapped["timestamp"],
+                trigger_emotion=result["label"],
+                message=feedback["message"],
+                source=feedback["source"],
+            )
+            wrapped["tutor_feedback"] = feedback
+            print(f"🤖 AI Tutor triggered [{device_id}] "
+                  f"emotion={feedback['emotion']} source={feedback['source']} "
+                  f"latency={feedback.get('latency_ms', '?')}ms")
+        except Exception as e:
+            print("⚠️ Tutor feedback generation failed:", e)
 
     return JSONResponse(wrapped)
 
@@ -189,7 +257,7 @@ async def websocket_camera(websocket: WebSocket):
                 results = predict_frame(current_model, img_rgb)
 
                 response = {
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
                     "faces": results,
                     "face_count": len(results),
                 }
@@ -215,6 +283,34 @@ async def websocket_camera(websocket: WebSocket):
                             )
                         except Exception:
                             pass
+
+                    # AI Tutor: dựa trên face đầu tiên, chỉ trigger khi cảm
+                    # xúc tiêu cực lặp lại liên tiếp (xem _update_streak_and_should_trigger)
+                    top_emotion = results[0]["label"]
+                    if _update_streak_and_should_trigger("webcam", top_emotion):
+                        try:
+                            trend = _recent_emotion_trend("webcam")
+                            feedback = await generate_tutor_feedback(
+                                emotion=top_emotion,
+                                confidence=results[0]["confidence"],
+                                trend=trend,
+                            )
+                            save_tutor_feedback(
+                                device_id="webcam",
+                                timestamp=response["timestamp"],
+                                trigger_emotion=top_emotion,
+                                message=feedback["message"],
+                                source=feedback["source"],
+                            )
+                            response["tutor_feedback"] = feedback
+                            print(
+                                f"🤖 AI Tutor triggered [webcam] "
+                                f"emotion={feedback['emotion']} "
+                                f"source={feedback['source']} "
+                                f"latency={feedback.get('latency_ms', '?')}ms"
+                            )
+                        except Exception as e:
+                                print("⚠️ Tutor feedback generation failed:", e)
 
                 await websocket.send_json(response)
 
@@ -328,12 +424,55 @@ def export_csv(
         writer.writerow({k: row[k] for k in ["id", "device_id", "timestamp", "emotion", "confidence", "created_at"]})
 
     output.seek(0)
-    filename = f"emotion_report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"emotion_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+class TutorFeedbackRequest(BaseModel):
+    device_id: str = "webcam"
+    emotion: str
+    confidence: float = 1.0
+    lang: str = "vi"
+
+
+@app.post("/tutor/feedback")
+async def tutor_feedback_on_demand(req: TutorFeedbackRequest):
+    """
+    Sinh feedback AI Tutor theo yêu cầu (vd: nút "Gợi ý" trên dashboard),
+    độc lập với cơ chế sustained-streak dùng trong /predict và WebSocket.
+    """
+    trend = _recent_emotion_trend(req.device_id)
+    feedback = await generate_tutor_feedback(
+        emotion=req.emotion,
+        confidence=req.confidence,
+        trend=trend,
+        lang=req.lang,
+    )
+    # DB write must never break feedback delivery (same isolation principle as
+    # the CV pipeline: a downstream failure never fails the request).
+    try:
+        save_tutor_feedback(
+            device_id=req.device_id,
+            timestamp=datetime.now(timezone.utc).isoformat() + "Z",
+            trigger_emotion=req.emotion,
+            message=feedback["message"],
+            source=feedback["source"],
+        )
+    except Exception as e:
+        print("⚠️ Failed to save tutor feedback to DB:", e)
+    print(f"✅ Tutor on-demand [{req.device_id}] emotion={feedback['emotion']} "
+          f"source={feedback['source']} latency={feedback.get('latency_ms', '?')}ms")
+    return feedback
+
+
+@app.get("/tutor/history")
+def tutor_feedback_history(device_id: str | None = None, limit: int = 50):
+    """Lịch sử các message AI Tutor đã sinh ra, để hiện trên dashboard hoặc phân tích."""
+    return {"history": get_tutor_feedback_history(device_id=device_id, limit=limit)}
 
 
 @app.post("/reports/seed")

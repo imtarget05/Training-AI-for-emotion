@@ -5,7 +5,58 @@ import torchvision.transforms as transforms
 from PIL import Image
 import cv2
 import numpy as np
+import json
 import os
+import subprocess
+from pathlib import Path
+
+# ================== Model identity & registry ==================
+
+MODEL_NAME = "emotion-resnet50"
+MODEL_VERSION = os.environ.get("MODEL_VERSION", "v1")
+MODEL_METADATA_PATH = Path(__file__).resolve().parent / "model_metadata.json"
+
+
+def _git_commit() -> str:
+    """Best-effort current git commit SHA. Never raises; '' if not a repo."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parent,
+            timeout=2,
+        )
+        return out.stdout.strip()
+    except Exception:
+        return ""
+
+
+def get_model_info() -> dict:
+    """
+    Public, non-sensitive identity of the active model. Safe to expose via a
+    health/info endpoint a recruiter or reviewer can query.
+    """
+    meta = None
+    if MODEL_METADATA_PATH.exists():
+        try:
+            meta = json.loads(MODEL_METADATA_PATH.read_text())
+        except Exception:
+            meta = None
+
+    base = (meta or {}).get("notes", {})
+    return {
+        "model_name": (meta or {}).get("model_name", MODEL_NAME),
+        "model_version": (meta or {}).get("model_version", MODEL_VERSION),
+        "architecture": (meta or {}).get("architecture", "resnet50"),
+        "feature_dim": (meta or {}).get("feature_dim", 2048),
+        "num_classes": len(CLASS_NAMES),
+        "classes": list(CLASS_NAMES),
+        "input_size": (meta or {}).get("input_size", 224),
+        "face_detector": (meta or {}).get("face_detector", "haarcascade_default"),
+        "weights_file": "final_model.pth",
+        "git_commit": _git_commit(),
+        # Sanitized: no filesystem paths, no secrets.
+        "metric_status": base.get("metric_source", "produced at eval time via evaluate.py/MLflow"),
+    }
 
 # ================== Kiến trúc Encoder & Classifier ==================
 

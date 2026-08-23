@@ -93,13 +93,22 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 /* Empty state */
 .empty-state{text-align:center;padding:40px 20px;color:var(--text3)}
 .empty-state p{font-size:.9rem}
+
+/* AI Tutor toast */
+.tutor-toast{position:fixed;bottom:24px;left:50%;transform:translate(-50%,20px);display:flex;align-items:center;gap:10px;max-width:520px;width:calc(100% - 32px);padding:14px 16px;background:linear-gradient(135deg,rgba(99,102,241,.95),rgba(139,92,246,.95));color:#fff;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:1000;opacity:0;pointer-events:none;transition:opacity .3s,transform .3s;font-size:.9rem;line-height:1.45}
+.tutor-toast.show{opacity:1;pointer-events:auto;transform:translate(-50%,0)}
+.tutor-toast .tt-icon{font-size:1.2rem;flex-shrink:0}
+.tutor-toast .tt-src{margin-left:6px;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;background:rgba(255,255,255,.18);padding:3px 8px;border-radius:999px;flex-shrink:0}
+.tutor-toast .tt-msg{flex:1}
+.tutor-toast .tt-close{background:rgba(255,255,255,.15);border:none;color:#fff;width:24px;height:24px;border-radius:50%;cursor:pointer;font-size:.7rem;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.tutor-toast .tt-close:hover{background:rgba(255,255,255,.3)}
 </style>
 </head>
 <body>
 <div class="app">
   <div class="header">
     <h1>🧠 AI Emotion Recognition</h1>
-    <p>Nhận diện cảm xúc real-time qua camera bằng Deep Learning (ResNet50)</p>
+    <p>Nhận diện cảm xúc real-time + AI Tutor động viên học tập (ResNet50 · Cloudflare Workers AI)</p>
   </div>
 
   <div class="status-bar">
@@ -135,6 +144,9 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
             </button>
             <button class="btn btn-outline" id="btnCapture" onclick="captureSnapshot()" style="display:none">
               📸 Chụp ảnh
+            </button>
+            <button class="btn btn-outline" id="btnHint" onclick="requestHint()" style="display:none" title="Lấy lời khuyên học tập ngay (không cần chờ streak)">
+              💡 Gợi ý từ AI Tutor
             </button>
           </div>
         </div>
@@ -230,9 +242,20 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 </div>
 
 <script>
+// ─── Backend origin (single config point) ──────────────────────────────
+// Empty = same origin (backend serves the dashboard).
+// Set to the backend URL when frontend is hosted separately
+// (e.g. Cloudflare Pages → Render): override via ?api= query param or
+// window.API_BASE_URL before this script runs.
+const API_BASE = (window.API_BASE_URL ||
+  new URLSearchParams(location.search).get('api') || '').replace(/\/$/, '');
+const apiURL = p => `${API_BASE}${p}`;
+</script>
+<script>
 const EMOTIONS={Surprise:{emoji:'😲',color:'#f59e0b'},Fear:{emoji:'😨',color:'#8b5cf6'},Disgust:{emoji:'🤢',color:'#22c55e'},Happiness:{emoji:'😊',color:'#eab308'},Sadness:{emoji:'😢',color:'#3b82f6'},Anger:{emoji:'😠',color:'#ef4444'},Neutral:{emoji:'😐',color:'#6b7280'}};
 
 let stream=null,ws=null,sending=false,running=false;
+let lastFace=null;
 let frameCount=0,lastFpsTime=Date.now();
 const video=document.getElementById('cameraFeed');
 const overlay=document.getElementById('overlay');
@@ -263,6 +286,7 @@ async function startCamera(){
     document.getElementById('btnStart').style.display='none';
     document.getElementById('btnStop').style.display='';
     document.getElementById('btnCapture').style.display='';
+    document.getElementById('btnHint').style.display='';
     setStatus(true,'Camera đang hoạt động');
     running=true;
     connectWS();
@@ -281,12 +305,13 @@ function stopCamera(){
   document.getElementById('btnStart').style.display='';
   document.getElementById('btnStop').style.display='none';
   document.getElementById('btnCapture').style.display='none';
+  document.getElementById('btnHint').style.display='none';
   setStatus(false,'Đã dừng camera');
 }
 
 function connectWS(){
   const proto=location.protocol==='https:'?'wss':'ws';
-  ws=new WebSocket(`${proto}://${location.host}/ws/camera`);
+  ws=new WebSocket(`${proto}://${API_BASE ? API_BASE.replace(/^https?:\/\//,'') : location.host}/ws/camera`);
   ws.onopen=()=>{setStatus(true,'Đã kết nối AI server');sendFrame()};
   ws.onmessage=(e)=>{
     try{
@@ -295,6 +320,9 @@ function connectWS(){
         updateResults(data.faces[0]);
         drawFaces(data.faces);
         addHistory(data.faces[0]);
+      }
+      if(data.tutor_feedback&&data.tutor_feedback.message){
+        showTutorToast(data.tutor_feedback.message,data.tutor_feedback.source);
       }
     }catch(err){}
     sending=false;
@@ -322,6 +350,7 @@ function sendFrame(){
 }
 
 function updateResults(face){
+  lastFace=face;
   const info=EMOTIONS[face.label]||{emoji:'❓',color:'#888'};
   document.getElementById('mainEmoji').textContent=info.emoji;
   document.getElementById('mainLabel').textContent=face.label;
@@ -389,17 +418,63 @@ function captureSnapshot(){
   a.click();
 }
 
+function requestHint(){
+  // Gọi endpoint /tutor/feedback trực tiếp (không qua streak) để có "gợi ý
+  // ngay" từ AI Tutor dựa trên cảm xúc mới nhất vừa nhận diện.
+  const emotion=lastFace?lastFace.label:'Neutral';
+  const confidence=lastFace?lastFace.confidence:1.0;
+  document.getElementById('btnHint').disabled=true;
+  fetch(apiURL('/tutor/feedback'),{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({device_id:'webcam',emotion,confidence,lang:'vi'})
+  })
+  .then(r=>r.json())
+  .then(fb=>{
+    if(fb&&fb.message)showTutorToast(fb.message,fb.source);
+    else showTutorToast('Không nhận được phản hồi ngay lúc này.','fallback');
+  })
+  .catch(()=>showTutorToast('Không kết nối được AI Tutor — hãy kiểm tra server.','fallback'))
+  .finally(()=>{document.getElementById('btnHint').disabled=false});
+}
+
 function setStatus(active,text){
   document.getElementById('statusDot').className='status-dot'+(active?' active':'');
   document.getElementById('statusText').textContent=text;
 }
 
+// AI Tutor toast: hiện message động viên khi server trả tutor_feedback
+let tutorToastTimer=null;
+function showTutorToast(message,source){
+  let toast=document.getElementById('tutorToast');
+  if(!toast){
+    toast=document.createElement('div');
+    toast.id='tutorToast';
+    toast.className='tutor-toast';
+    toast.innerHTML='<span class="tt-icon">💬</span><span class="tt-msg"></span><span class="tt-src"></span><button class="tt-close" onclick="hideTutorToast()">✕</button>';
+    document.body.appendChild(toast);
+  }
+  toast.querySelector('.tt-msg').textContent=message;
+  const isLLM=source!=='fallback';
+  toast.querySelector('.tt-icon').textContent=isLLM?'💬':'🤖';
+  toast.querySelector('.tt-src').textContent=isLLM?'AI':'Rule-based';
+  toast.classList.add('show');
+  clearTimeout(tutorToastTimer);
+  tutorToastTimer=setTimeout(hideTutorToast,12000);
+}
+
+function hideTutorToast(){
+  const toast=document.getElementById('tutorToast');
+  if(toast){toast.classList.remove('show')}
+  clearTimeout(tutorToastTimer);
+}
+
 async function refreshReports() {
   try {
     const [distRes, confRes, devRes] = await Promise.all([
-      fetch('/reports/emotion-distribution').then(r => r.json()),
-      fetch('/reports/confidence-stats').then(r => r.json()),
-      fetch('/reports/devices').then(r => r.json())
+      fetch(apiURL('/reports/emotion-distribution')).then(r => r.json()),
+      fetch(apiURL('/reports/confidence-stats')).then(r => r.json()),
+      fetch(apiURL('/reports/devices')).then(r => r.json())
     ]);
 
     document.getElementById('kpiTotal').textContent = distRes.total_predictions || 0;
@@ -452,7 +527,7 @@ async function refreshReports() {
 
 async function seedDataAndRefresh() {
   try {
-    const res = await fetch('/reports/seed', {method:'POST'});
+    const res = await fetch(apiURL('/reports/seed'), {method:'POST'});
     const data = await res.json();
     alert(`Seeded ${data.seeded_records} sample records.`);
     await refreshReports();

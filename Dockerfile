@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# Logs stream to stdout immediately in containers
+ENV PYTHONUNBUFFERED=1
+
 # Cài dependencies cần cho pillow, torch, torchvision
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \

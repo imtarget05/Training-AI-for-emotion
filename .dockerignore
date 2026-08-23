@@ -13,5 +13,10 @@ __pycache__/
 .vscode
 .idea
 
+# Runtime artifacts — created/owned by the container at runtime
+emotion_data.db
+data/
+reports/
+
 # Không ignore file model .pth nhé!
 # KHÔNG thêm dòng: *.pt, *.pth, *.ptl

@@ -1,0 +1,27 @@
+{
+  "model_name": "emotion-resnet50",
+  "model_version": "v1",
+  "architecture": "resnet50",
+  "feature_dim": 2048,
+  "num_classes": 7,
+  "classes": [
+    "Surprise", "Fear", "Disgust", "Happiness", "Sadness", "Anger", "Neutral"
+  ],
+  "input_size": 224,
+  "face_detector": "haarcascade_frontalface_default.xml",
+  "created_at": "unknown",
+  "git_commit": "unknown",
+  "dataset_id": "fer2013-test (Kaggle msambare/fer2013, 7178 images)",
+  "evaluation": {
+    "dataset": "FER2013 public test split",
+    "n_images": 7178,
+    "accuracy": 0.4983,
+    "macro_f1": 0.4210,
+    "protocol": "224x224 RGB resize, ImageNet normalization, CPU, batch=1",
+    "report": "image/eval_report.png"
+  },
+  "notes": {
+    "metric_source": "Metrics are NOT recorded here — they are produced at eval time by evaluate.py and stored via MLflow / eval report.",
+    "training_script": "No training script is shipped in this repo; weights were produced in an external training run. train.py harness documents the intended pipeline and requires a labeled dataset."
+  }
+}

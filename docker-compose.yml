@@ -1,0 +1,29 @@
+# Docker Compose for local development / demo.
+#
+# The AI Tutor uses Cloudflare Workers AI (cloud-hosted LLM) — NO local LLM
+# server is required. Credentials come from your environment / .env file:
+#
+#   export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...
+#   docker compose up --build
+#   # then: open http://localhost:8000/dashboard
+#   # Without credentials the tutor gracefully falls back to canned messages.
+
+services:
+  app:
+    build: .
+    image: training-ai-emotion:latest
+    # container listens on 8080 (Dockerfile default); map to 8000 for local dev
+    ports:
+      - "8000:8080"
+    environment:
+      PORT: "8080"
+      DB_PATH: "/app/data/emotion_data.db"   # persists on the bind-mount below
+      CLOUDFLARE_ACCOUNT_ID: "${CLOUDFLARE_ACCOUNT_ID:-}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      CLOUDFLARE_AI_MODEL: "${CLOUDFLARE_AI_MODEL:-@cf/meta/llama-3.2-3b-instruct}"
+      CLOUDFLARE_AI_TIMEOUT_SECONDS: "${CLOUDFLARE_AI_TIMEOUT_SECONDS:-10}"
+      TUTOR_STREAK_THRESHOLD: "${TUTOR_STREAK_THRESHOLD:-3}"
+      TUTOR_COOLDOWN_SECONDS: "${TUTOR_COOLDOWN_SECONDS:-45}"
+    volumes:
+      - ./data:/app/data               # SQLite survives container restarts
+    restart: unless-stopped

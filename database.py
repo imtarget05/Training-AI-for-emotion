@@ -1,39 +1,139 @@
 """
-Database module: SQLite persistence for emotion recognition data.
+Database module: persistence for emotion recognition data.
 Stores all predictions with timestamps for reporting & analytics.
+
+Backends:
+- SQLite (default, local development): file path via DB_PATH
+- PostgreSQL (production free-tier hosting, e.g. Neon/Supabase):
+  set DATABASE_URL (postgres://...) — schema & queries are translated
+  automatically. No credentials belong in Git.
 """
-import sqlite3
 import os
+import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import json
 
-DB_PATH = "emotion_data.db"
+# Overridable via env so tests and containers can point at their own file
+DB_PATH = os.environ.get("DB_PATH", "emotion_data.db")
+
+# Production database (PostgreSQL). Empty => local SQLite is used.
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+USE_PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+
+
+class _PgCursor:
+    """Translates sqlite-style '?' placeholders to psycopg2 '%s' and returns
+    dual-access rows (by index or column name), mimicking sqlite3.Row."""
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, sql, params=None):
+        return self._cur.execute(sql.replace("?", "%s"), params) if params is not None \
+            else self._cur.execute(sql.replace("?", "%s"))
+
+    def executemany(self, sql, seq):
+        return self._cur.executemany(sql.replace("?", "%s"), seq)
+
+    @staticmethod
+    def _wrap(row):
+        if row is None:
+            return None
+        vals = list(row.values())
+        return type("_Row", (), {
+            "__getitem__": lambda s, k: vals[k] if isinstance(k, int) else row[k],
+        })()
+
+    def fetchone(self):
+        return self._wrap(self._cur.fetchone())
+
+    def fetchall(self):
+        return [self._wrap(r) for r in self._cur.fetchall()]
+
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+
+
+class _PgConnection:
+    """Minimal connection proxy matching the sqlite3 usage in this module."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        import psycopg2.extras
+        return _PgCursor(self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
+
+    # sqlite3.Row support does not exist in psycopg2; queries already return
+    # dual-access rows via _PgCursor, so swallow row_factory assignments.
+    @property
+    def row_factory(self):
+        return None
+
+    @row_factory.setter
+    def row_factory(self, _):
+        pass
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def get_connection():
+    """Get a database connection (PostgreSQL if DATABASE_URL is set, else SQLite)."""
+    if USE_PG:
+        import psycopg2
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        # Neon/Supabase and other managed providers require SSL; local dev
+        # Postgres typically doesn't. Only force sslmode=require for remote hosts.
+        url = DATABASE_URL
+        parsed = urlparse(url)
+        if "sslmode=" not in parse_qs(parsed.query) and "sslmode" not in url:
+            hostname = (parsed.hostname or "").lower()
+            remote = hostname not in ("localhost", "127.0.0.1", "::1", "") and not hostname.endswith(".local")
+            if remote:
+                q = parsed.query + ("&" if parsed.query else "") + "sslmode=require"
+                url = urlunparse(parsed._replace(query=q))
+        return _PgConnection(psycopg2.connect(url))
+    return sqlite3.connect(DB_PATH)
+
+
+def _is_pg() -> bool:
+    return USE_PG
 
 
 def init_db():
-    """Initialize SQLite database with required tables."""
-    conn = sqlite3.connect(DB_PATH)
+    """Initialize database with required tables (SQLite or PostgreSQL)."""
+    conn = get_connection()
     cursor = conn.cursor()
-    
+
+    pk = "SERIAL PRIMARY KEY" if _is_pg() else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts_default = "DEFAULT CURRENT_TIMESTAMP"  # valid on both backends
+
     # Table: predictions - stores each emotion prediction
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             device_id TEXT NOT NULL,
             timestamp TEXT NOT NULL,
             emotion TEXT NOT NULL,
             confidence REAL NOT NULL,
             face_detected INTEGER DEFAULT 0,
             probs_json TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT {ts_default}
         )
     """)
-    
+
     # Table: sessions - track camera/device usage sessions
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             device_id TEXT NOT NULL,
             start_time TEXT NOT NULL,
             end_time TEXT,
@@ -41,11 +141,11 @@ def init_db():
             avg_confidence REAL DEFAULT 0.0
         )
     """)
-    
+
     # Table: reports - metadata for generated reports
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             report_type TEXT NOT NULL,
             generated_at TEXT NOT NULL,
             period_start TEXT,
@@ -54,21 +154,33 @@ def init_db():
             metadata_json TEXT
         )
     """)
-    
+
+    # Table: tutor_feedback - AI Tutor messages generated in response to
+    # sustained negative emotion states (see tutor.py)
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS tutor_feedback (
+            id {pk},
+            device_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            trigger_emotion TEXT NOT NULL,
+            message TEXT NOT NULL,
+            source TEXT NOT NULL,
+            created_at TEXT {ts_default}
+        )
+    """)
+
+
     # Indexes for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_device_id ON predictions(device_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON predictions(timestamp)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_emotion ON predictions(emotion)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON predictions(created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tutor_device_id ON tutor_feedback(device_id)")
+
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized at:", DB_PATH)
-
-
-def get_connection():
-    """Get a database connection."""
-    return sqlite3.connect(DB_PATH)
+    print("✅ Database initialized at:", DATABASE_URL if USE_PG else DB_PATH)
 
 
 def save_prediction(device_id: str, timestamp: str, emotion: str, 
@@ -260,12 +372,17 @@ def get_predictions_per_hour(
     conn = get_connection()
     cursor = conn.cursor()
     
-    query = """
-        SELECT 
-            strftime('%Y-%m-%d %H:00:00', timestamp) as hour,
+    hour_expr = (
+        "to_char(timestamp::timestamp, 'YYYY-MM-DD HH24:00:00') as hour"
+        if _is_pg()
+        else "strftime('%Y-%m-%d %H:00:00', timestamp) as hour"
+    )
+    query = f"""
+        SELECT
+            {hour_expr},
             COUNT(*) as count,
             AVG(confidence) as avg_confidence
-        FROM predictions 
+        FROM predictions
         WHERE 1=1
     """
     params = []
@@ -340,6 +457,62 @@ def get_daily_summary(
             "avg_confidence": round(row[3], 4) if row[3] else 0.0,
             "first_prediction": row[4],
             "last_prediction": row[5]
+        }
+        for row in rows
+    ]
+
+
+def save_tutor_feedback(
+    device_id: str,
+    timestamp: str,
+    trigger_emotion: str,
+    message: str,
+    source: str,
+):
+    """Save a generated AI Tutor message to the database."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO tutor_feedback (device_id, timestamp, trigger_emotion, message, source)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (device_id, timestamp, trigger_emotion, message, source),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_tutor_feedback_history(
+    device_id: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Fetch recent AI Tutor messages, optionally filtered by device."""
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM tutor_feedback WHERE 1=1"
+    params: List[Any] = []
+    if device_id:
+        query += " AND device_id = ?"
+        params.append(device_id)
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limit)
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row["id"],
+            "device_id": row["device_id"],
+            "timestamp": row["timestamp"],
+            "trigger_emotion": row["trigger_emotion"],
+            "message": row["message"],
+            "source": row["source"],
+            "created_at": row["created_at"],
         }
         for row in rows
     ]

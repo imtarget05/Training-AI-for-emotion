@@ -20,12 +20,24 @@ env/
 # Logs
 *.log
 
+# Test artifacts
+.pytest_cache/
+
+# MLflow local tracking store (MLOps)
+mlruns/
+mlflow.db
+image/eval_run*.log
+
 # Env files
 .env
 .env.*
 
 # SQLite database (runtime artifact)
 emotion_data.db
+test_runtime.db
+
+# Docker bind-mount data dir (compose)
+data/
 
 # Generated HTML reports
 reports/
