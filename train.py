@@ -16,42 +16,8 @@ CLI:
   python train.py --config configs/train_v2_finetune.yaml
 
 Outputs a checkpoint to outputs/<run_hash>.pth and logs to MLflow.
-"""
 
-import argparse
-import hashlib
-import json
-import os
-import random
-import time
-from pathlib import Path
-from typing import Dict, List, Optional
-
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-
-from model import CLASS_NAMES, ResNetEncoder, FinetuneClassifier, device as model_device
-from torchvision import transforms
-
-Built ONLY for optimization experiments. The production application (main.py)
-does NOT depend on this file. Inference stays in model.py unchanged.
-
-Experiments:
-  E0 baseline reproduction   (configs/train_v1_baseline.yaml)
-  E1 class-weighted loss     (configs/train_v2_weighted.yaml)
-  E2 layer4 finetune         (configs/train_v2_finetune.yaml)
-  E3 combined (E1+E2)        (configs/train_v2_combined.yaml)
-
-CLI:
-  python train.py --config configs/train_v1_baseline.yaml
-  python train.py --config configs/train_v2_weighted.yaml
-  python train.py --config configs/train_v2_finetune.yaml
-
-Outputs a checkpoint to outputs/<run_hash>.pth and logs to MLflow.
-
+Built ONLY for optimization experiments; main.py does NOT depend on this file.
 Design rules:
 - Test set (FER2013 test/) is NEVER used during training/tuning.
 - Train/val split from train/ only (stratified, seed=42).
@@ -104,7 +70,7 @@ def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-        if torch.cuda.is_available():
+    if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
 
@@ -144,7 +110,7 @@ class FERDataset(Dataset):
         label_idx = CLASS_NAMES.index(label_name)
         from PIL import Image
         img = Image.open(path).convert("L")
-                if self.transform:
+        if self.transform:
             img = self.transform(img)
         return img, label_idx
 
@@ -209,7 +175,7 @@ def build_model(freeze_backbone: bool, trainable_layers: str) -> FinetuneClassif
         for p in layer4.parameters():
             p.requires_grad = True
 
-        return model.to(model_device)
+    return model.to(model_device)
 
 
 def train(cfg: dict):
@@ -217,7 +183,7 @@ def train(cfg: dict):
 
     # 1. Stratified split from train/
     train_dir, val_dir = stratified_split(
-        Path(cfg["train_split_dir"]), cfg["validation_split"], cfg["seed"])
+        Path(os.path.expanduser(cfg["train_split_dir"])), cfg["validation_split"], cfg["seed"])
 
     # 2. Datasets
     aug = cfg.get("training", {}).get("augmentation", "train")
@@ -247,8 +213,8 @@ def train(cfg: dict):
 
     # 5. Optimizer
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.Adam(trainable_params, lr=cfg["learning_rate"],
-                                  weight_decay=cfg.get("weight_decay", 1e-5))
+    optimizer = torch.optim.Adam(trainable_params, lr=float(cfg["learning_rate"]),
+                                  weight_decay=float(cfg.get("weight_decay", 1e-5)))
 
     # 6. Scheduler
     scheduler = None
@@ -263,7 +229,7 @@ def train(cfg: dict):
     # 8. Training loop
     best_val_f1 = -1.0
     patience_counter = 0
-        run_hash = hashlib.md5(json.dumps({k: str(v) for k, v in cfg.items()}, sort_keys=True).encode()).hexdigest()[:8]
+    run_hash = hashlib.md5(json.dumps({k: str(v) for k, v in cfg.items()}, sort_keys=True).encode()).hexdigest()[:8]
     last_ckpt = None
 
     for epoch in range(cfg["max_epochs"]):
@@ -314,7 +280,7 @@ def train(cfg: dict):
     print(f"\nTraining complete.")
     print(f"Best val macro-F1: {best_val_f1:.4f}")
     print(f"Final checkpoint: {final_path}")
-        return final_path
+    return final_path
 
 
 def _evaluate(model, loader):

@@ -39,7 +39,16 @@
 
 - [x] **C1. Commit optimization artifacts** vào branch `ml-optimization-v2` (train.py, configs×4, audits, reproduce script).
 - [x] **C2. Push branch lên origin** để backup trước khi Colab tiếp tục.
-- [ ] **C3. Review `training.ipynb`** trước khi commit — không chứa secret/path cục bộ; nếu sạch thì commit.
+- [x] **C2b. Sửa 5 bug trong train.py** (phát hiện khi smoke test sau commit):
+      1. Docstring lạc làm file không compile được (unterminated triple-quote)
+      2. Indentation sai ở `set_seed`, `FERDataset.__getitem__`, `run_hash`, `return final_path`
+      3. `build_model` trả `None` với config "head" (return nằm trong if)
+      4. `~` trong config path không expand (`Path("~/.cache/...")` là literal)
+      5. YAML parse `1e-5` thành string → ép `float()` cho optimizer params
+      Verification: py_compile OK + CPU smoke test PASS end-to-end
+      (train→val→checkpoint→MLflow, loss=1.92, val chạy, ckpt saved, 23.5s)
+- [ ] **C3. Review `training.ipynb`** — ĐÃ scan: không secret/path cục bộ; notebook 1 cell khung, cần hoàn thiện các section theo protocol Colab khi chạy thật.
+- [x] **C4a. Full regression sau fix: 55 passed / 7 skipped** — production không bị ảnh hưởng.
 - [ ] **C4. Sau A8 + B7: freeze final** — cập nhật README/VALIDATION_REPORT với metrics cuối, quyết định kép:
       (V1 RETAINED | V2 PROMOTED) + (PUBLICLY DEPLOYED — VERIFIED | DEPLOYMENT-BLOCKED).
 
