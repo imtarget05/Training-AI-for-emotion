@@ -1,0 +1,38 @@
+# Config: E2 — Fine-tune layer4 + head (subset of v1)
+# Hypothesis: frozen ResNet-50 backbone limits emotion-specific feature learning
+# for visually-similar confusion pairs (Fear↔Fright, Anger↔Disgust).
+
+seed: 42
+architecture: resnet50
+pretrained: false
+trainable_layers: layer4_plus_head           # Unfreeze ResNet layer4 + classifier
+
+train_split_dir: ~/.cache/kagglehub/datasets/msambare/fer2013/versions/1/train
+validation_split: 0.2
+stratified: true
+
+image_size: 224
+resize: 256
+normalize_mean: [0.485, 0.456, 0.406]
+normalize_std: [0.229, 0.224, 0.225]
+
+optimizer: adam
+learning_rate: 0.0003                       # lower LR for backbone fine-tuning
+batch_size: 64
+max_epochs: 50
+weight_decay: 1e-5
+scheduler:
+  type: cosine
+  T_max: 50
+early_stopping_patience: 5
+
+loss:
+  type: cross_entropy
+  class_weights: null                        # plain CE (isolated variable vs E1)
+
+# Subset for CPU feasibility
+max_train_images_per_class: 800
+max_val_images_per_class: 200
+
+mlflow_experiment: emotion-resnet50
+eval_dataset: ~/.cache/kagglehub/datasets/msambare/fer2013/versions/1/test

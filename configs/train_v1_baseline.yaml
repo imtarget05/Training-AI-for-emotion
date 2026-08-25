@@ -1,0 +1,42 @@
+# Config: E0 — Baseline reproduction (frozen-resNet50 + linear head)
+# Replicates v1 configuration from train split for comparison
+
+seed: 42
+architecture: resnet50
+pretrained: false            # matches model.py: models.resnet50(weights=None)
+
+# Training data source
+train_split_dir: ~/.cache/kagglehub/datasets/msambare/fer2013/versions/1/train
+validation_split: 0.2        # 80/20 stratified train/val from train/
+stratified: true
+
+# Model
+freeze_backbone: true        # v1 behaviour: frozen feature extractor + Linear head
+trainable_layers: head       # Linear(2048, 7)
+
+# Preprocessing (must match model.py inference_transform exactly)
+image_size: 224
+resize: 256
+normalize_mean: [0.485, 0.456, 0.406]
+normalize_std: [0.229, 0.224, 0.225]
+
+# Training
+optimizer: adam
+learning_rate: 0.001
+batch_size: 64
+max_epochs: 50
+weight_decay: 1e-5
+scheduler:
+  type: cosine
+  T_max: 50
+early_stopping_patience: 5
+
+# Evaluation
+eval_dataset: ~/.cache/kagglehub/datasets/msambare/fer2013/versions/1/test  # held-out, final only
+
+# MLflow
+mlflow_experiment: emotion-resnet50
+
+# Subset controls (for CPU feasibility of reproduction experiments)
+max_train_images_per_class: null            # null = full; integer limits for CPU experiments
+max_val_images_per_class: null
