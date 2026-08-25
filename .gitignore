@@ -42,5 +42,8 @@ data/
 # Generated HTML reports
 reports/
 
+# Local training run artifacts (checkpoints/logs per run)
+outputs/
+
 # NOTE: Không ignore file model .pth (cần cho inference)
 # KHÔNG thêm: *.pt, *.pth, *.ptl
