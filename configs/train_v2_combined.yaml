@@ -31,9 +31,10 @@ loss:
   type: cross_entropy
   class_weights: train_inverse_frequency
 
-# Subset for CPU feasibility
-max_train_images_per_class: 800
-max_val_images_per_class: 200
+# FULL DATA — GPU (T4) run. Subset 800/class was the CPU-feasibility design,
+# retired 2026-08-25 so E1/E2/E3 compare apples-to-apples with full-data E0.
+max_train_images_per_class: null
+max_val_images_per_class: null
 
 mlflow_experiment: emotion-resnet50
 eval_dataset: ~/.cache/kagglehub/datasets/msambare/fer2013/versions/1/test
