@@ -47,7 +47,14 @@
       5. YAML parse `1e-5` thành string → ép `float()` cho optimizer params
       Verification: py_compile OK + CPU smoke test PASS end-to-end
       (train→val→checkpoint→MLflow, loss=1.92, val chạy, ckpt saved, 23.5s)
-- [ ] **C3. Review `training.ipynb`** — ĐÃ scan: không secret/path cục bộ; notebook 1 cell khung, cần hoàn thiện các section theo protocol Colab khi chạy thật.
+- [x] **C3. Review `training.ipynb`** — ĐÃ review + fix 4 lỗi trước khi chạy Colab (commit bd65237+):
+      1. Cell E0 chạy nhầm `reproduce_v1.py` (chỉ eval frozen weights) → đổi sang
+         `train.py --config <runtime yaml>` đúng định nghĩa E0 (OPTIMIZATION_CONTEXT: retrain cùng config từ train split)
+      2. Cell gate thiếu `--weights` → evaluate.py mặc định load final_model.pth frozen → gate vô nghĩa;
+         giờ chọn checkpoint mới nhất trong outputs/*_final.pth + chặn đánh giá frozen weights
+      3. Monitor cell grep sai tiến trình → đổi sang train.py
+      4. Path dataset hardcode versions/1 trong config → runtime config ghi path kagglehub đã discover
+      Notebook: 23 cell, syntax OK toàn bộ; regression 55 passed / 7 skipped sau sửa.
 - [x] **C4a. Full regression sau fix: 55 passed / 7 skipped** — production không bị ảnh hưởng.
 - [ ] **C4. Sau A8 + B7: freeze final** — cập nhật README/VALIDATION_REPORT với metrics cuối, quyết định kép:
       (V1 RETAINED | V2 PROMOTED) + (PUBLICLY DEPLOYED — VERIFIED | DEPLOYMENT-BLOCKED).
