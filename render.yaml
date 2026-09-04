@@ -1,0 +1,46 @@
+# Render Blueprint — free-tier deployment
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Deploy: Render Dashboard → New → Blueprint → connect this repo.
+# Required env vars (set in Render dashboard, marked sync: false):
+#   DATABASE_URL            — Neon Postgres (free, persistent) — REQUIRED
+#   CLOUDFLARE_ACCOUNT_ID   — Workers AI account id (optional; tutor falls back without it)
+#   CLOUDFLARE_API_TOKEN    — Workers AI token (optional; tutor falls back without it)
+# Optional after first deploy (cross-origin dashboard on Cloudflare Pages):
+#   CORS_ORIGINS            — e.g. https://<project>.pages.dev
+
+services:
+  - type: web
+    name: emotion-tutor-api
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: WEIGHTS_PATH
+        value: final_model.pth
+      - key: DB_PATH
+        value: /tmp/emotion_data.db        # unused when DATABASE_URL is set
+      - key: DATABASE_URL
+        sync: false                        # Neon Postgres URL — REQUIRED for persistence
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: CLOUDFLARE_AI_MODEL
+        value: "@cf/meta/llama-3.2-3b-instruct"
+      - key: CLOUDFLARE_AI_TIMEOUT_SECONDS
+        value: "10"
+      - key: CLOUDFLARE_MAX_RETRIES
+        value: "3"
+      - key: CLOUDFLARE_RETRY_BACKOFF_SECONDS
+        value: "0.5"
+      - key: TUTOR_STREAK_THRESHOLD
+        value: "3"
+      - key: TUTOR_COOLDOWN_SECONDS
+        value: "45"
+      - key: CORS_ORIGINS
+        sync: false                        # e.g. https://<project>.pages.dev
