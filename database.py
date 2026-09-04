@@ -183,10 +183,21 @@ def init_db():
     print("✅ Database initialized at:", DATABASE_URL if USE_PG else DB_PATH)
 
 
+def _clean_ts(ts: str) -> str:
+    """Return a timestamp string PostgreSQL can cast to DATE/TIMESTAMP."""
+    if not isinstance(ts, str):
+        return ts
+    # '...+00:00Z' -> '...Z'  (remove redundant '+00:00' before trailing 'Z')
+    if ts.endswith("+00:00Z"):
+        return ts[:-7] + "Z"
+    return ts
+
+
 def save_prediction(device_id: str, timestamp: str, emotion: str, 
                     confidence: float, probs: Dict[str, float], 
                     face_detected: bool = True):
     """Save a single prediction to the database."""
+    timestamp = _clean_ts(timestamp)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -224,7 +235,7 @@ def save_batch_predictions(predictions: List[Dict[str, Any]]):
         [
             (
                 p["device_id"],
-                p["timestamp"],
+                _clean_ts(p["timestamp"]),
                 p["emotion"],
                 p["confidence"],
                 1 if p.get("face_detected", True) else 0,
@@ -477,7 +488,7 @@ def save_tutor_feedback(
         INSERT INTO tutor_feedback (device_id, timestamp, trigger_emotion, message, source)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (device_id, timestamp, trigger_emotion, message, source),
+        (device_id, _clean_ts(timestamp), trigger_emotion, message, source),
     )
     conn.commit()
     conn.close()
