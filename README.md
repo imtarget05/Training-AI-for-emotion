@@ -97,7 +97,7 @@ Modules:
 > this repo**; the weights came from an earlier training run. `evaluate.py`
 > therefore validates inference (`sanity`) and reproduces metrics (`eval`)
 > honestly whenever a labeled dataset is supplied — nothing is fabricated
-> (see [Testing](#8-testing) — metrics below are reproducible via `evaluate.py`).
+> (see [Testing](#9-testing) — metrics below are reproducible via `evaluate.py`).
 
 ## 4. Real-time pipeline
 
@@ -148,10 +148,23 @@ Trigger tuning via env: `TUTOR_STREAK_THRESHOLD` (default 3),
 
 ## 7. Database
 
-SQLite (`emotion_data.db`, overridable via `DB_PATH`). Core tables:
+SQLite (`emotion_data.db`, overridable via `DB_PATH`) for local dev, or
+PostgreSQL via `DATABASE_URL` (Neon) — selected automatically by `database.py`.
+Production runs on Neon PostgreSQL. Core tables:
 `predictions`, `sessions`, `tutor_feedback` (indexed on `device_id`), `reports`.
 
-## 8. Testing
+## 8. MLOps status (honest inventory)
+
+| Component | Status |
+|---|---|
+| Docker | ✅ Dockerfile + docker-compose.yml; running in production on Render |
+| Testing | ✅ pytest suite (see §9 Testing below) run manually before push |
+| Model metadata | ✅ `model_metadata.json` + `GET /info` endpoint |
+| MLflow | ⚠️ Setup **verification scripts only** (`scripts/_verify_mlflow.py`, `_verify_mlflow_container.py`); the training pipeline that would emit MLflow runs is not part of this repo |
+| CI | ❌ No CI pipeline (no GitHub Actions workflow) — run `pytest tests/` manually |
+| CD | ✅ GitHub push → Render auto-deploy (`render.yaml`, `autoDeploy: yes`) |
+
+## 9. Testing
 
 ```bash
 pip install -r requirements-dev.txt
@@ -165,7 +178,7 @@ boundary (mock — no real Cloudflare credentials needed), DB round-trip, and th
 contract via TestClient — **49 unit/integration tests, deterministic**. It
 never requires a developer's GPU or local model weights (they are stubbed at
 the import boundary in `tests/conftest.py`).
-## 9. ML metrics
+## 10. ML metrics
 
 Only values that can actually be reproduced/measured are reported here:
 
@@ -187,7 +200,7 @@ Limitations.
 Historical training curves and a confusion matrix live in `image/`
 (`finetune_metrics.png`, `confusion_matrix.png`).
 
-## 10. Run instructions
+## 11. Run instructions
 
 ### Local (Python 3.10+)
 
@@ -261,9 +274,9 @@ python scripts/demo_e2e.py --base http://localhost:8000
 |---|---|
 | `DEMO_SCRIPT.md` | Step-by-step live / fallback demo scenarios |
 | `DATASET.md` | FER2013 provenance, mapping, conversion |
-| `DEPLOYMENT_RUNBOOK.md` | Operator steps: Neon → Koyeb → Pages → live checks |
+| `DEPLOYMENT_RUNBOOK.md` | Operator steps: Neon → Render → Pages → live checks |
 | `COST_MODEL.md` | Infrastructure cost model |
-## 11. Limitations
+## 12. Limitations
 
 * Emotion recognition is **probabilistic**; a facial expression is not proof
   of an emotional state.

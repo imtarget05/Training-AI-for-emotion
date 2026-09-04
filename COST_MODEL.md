@@ -17,10 +17,11 @@ against official pricing pages before each deployment — free tiers change.
 Free: unlimited static requests, unlimited bandwidth on free tier.
 Cost at all profiles: **$0**.
 
-### Backend — Koyeb free instance
-Free allowance historically = one small instance, scale-to-zero, limited
-free instance-hours per month. At ≤100 visitors/day the service is awake a
-small fraction of the time; cold starts (~seconds) acceptable.
+### Backend — Render free Web Service (current)
+The backend runs on Render (free Web Service, Docker runtime, region
+Singapore) via the `render.yaml` blueprint. Free-tier instances sleep after
+15 min idle → cold start ~30–60 s (model load). Koyeb was the previous
+provider and has been replaced.
 Cost at all profiles: **$0 within current free-instance quota**.
 ⚠️ If usage kept the instance awake continuously 24/7 it could exceed the
 free quota → verify dashboard monthly.
@@ -54,13 +55,13 @@ terms can change at any time.
 | Provider | Card required? |
 |---|---|
 | Cloudflare Pages / Workers AI | No (Workers AI needs no card on free) |
-| Koyeb | No |
+| Render | No for free web services |
 | Neon | No |
-| Render (fallback) | No for free web services |
 
 ## Worst-case boundary
 
-The first layer to break at scale is backend instance-hours (Koyeb), then
+The first layer to break at scale is backend instance-hours (Render free),
+then
 Neon compute-hours. LLM cost stays negligible until ~10⁵ tutor calls/month.
 No auto-scaling is configured anywhere → **no surprise bill vector exists**
 (no provider has a card on file).
