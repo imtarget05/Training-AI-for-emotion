@@ -7,7 +7,7 @@ digital-learning / e-learning context (e.g., "student looks frustrated ->
 suggest a break or an easier next step").
 
 Design notes:
-- Uses Cloudflare Workers AI REST API (@cf/meta/llama-3.3-70b-instruct-fp8-fast
+- Uses Cloudflare Workers AI REST API (@cf/meta/llama-3.2-3b-instruct
   by default, configurable via CLOUDFLARE_AI_MODEL). Credentials are provided
   exclusively through environment variables — never hardcoded.
   NOTE: the foundation model is a Cloudflare-hosted pretrained model; this
@@ -16,10 +16,16 @@ Design notes:
 - Never calls the LLM on every frame. main.py only calls generate_tutor_feedback()
   once an emotion has been *sustained* for a few consecutive frames, to avoid
   spamming the model on noisy single-frame misclassifications.
-- If Cloudflare is unreachable, times out, or errors, falls back to a canned,
-  rule-based message so the API never breaks because the LLM is down.
+- Reliability (§6 of 01_END_TO_END_AI_EMOTION_PLATFORM.md): transient
+  provider failures (429/502/503/504, timeouts, connection errors) are
+  retried with exponential backoff. After retry exhaustion an exhausted
+  429 raises CloudflareRateLimitExhausted so the API layer can map it to a
+  safe HTTP 503 without exposing provider internals; all other failures
+  fall back to a canned, rule-based message so the API never breaks
+  because the LLM is down.
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -31,6 +37,16 @@ logger = logging.getLogger("tutor")
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
 
+
+class CloudflareRateLimitExhausted(RuntimeError):
+    """Raised when Cloudflare keeps returning 429 after all retries.
+
+    The API layer maps this to a safe HTTP 503 (no provider internals leak).
+    Background paths (/predict, WebSocket) catch it and degrade to a
+    rate_limited fallback payload while keeping the prediction HTTP 200.
+    """
+
+
 # ─── Cloudflare Workers AI configuration (env-only) ──────────────────────────
 CLOUDFLARE_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
 CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
@@ -39,6 +55,14 @@ CLOUDFLARE_AI_MODEL = os.environ.get(
 )
 CLOUDFLARE_AI_TIMEOUT_SECONDS = float(
     os.environ.get("CLOUDFLARE_AI_TIMEOUT_SECONDS", "10")
+)
+
+# Reliability knobs (§6): retryable statuses + bounded retries with backoff.
+# Env-overridable for tuning without code changes.
+RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
+CLOUDFLARE_MAX_RETRIES = int(os.environ.get("CLOUDFLARE_MAX_RETRIES", "3"))
+CLOUDFLARE_RETRY_BACKOFF_SECONDS = float(
+    os.environ.get("CLOUDFLARE_RETRY_BACKOFF_SECONDS", "0.5")
 )
 _CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
 
@@ -106,8 +130,16 @@ def _cloudflare_configured() -> bool:
 async def _call_cloudflare(prompt: str) -> Optional[str]:
     """
     Call Cloudflare Workers AI text generation via the REST API.
-    Returns None on any failure (missing config, timeout, HTTP error,
-    malformed body, empty reply) — never raises.
+
+    Reliability (§6):
+    - 429/502/503/504, timeouts and connection errors are retried up to
+      CLOUDFLARE_MAX_RETRIES times with exponential backoff.
+    - Non-retryable client errors (e.g. 401/403/400/404) return None
+      immediately — no retry, deterministic fallback (401 regression case).
+    - Returns the reply text on success, None on non-rate-limit failure
+      (caller falls back to a canned message) — never raises except
+      CloudflareRateLimitExhausted when retries are exhausted and the last
+      failure was a 429.
     """
     if not _cloudflare_configured():
         logger.warning(
@@ -137,18 +169,65 @@ async def _call_cloudflare(prompt: str) -> Optional[str]:
         "temperature": 0.6,
         "stream": False,
     }
-    try:
-        async with httpx.AsyncClient(timeout=CLOUDFLARE_AI_TIMEOUT_SECONDS) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            # Contract: {"result": {"response": "..."}, "success": true, ...}
-            result = data.get("result") or {}
-            text = (result.get("response") or "").strip() if isinstance(result, dict) else ""
-            return text or None
-    except Exception as e:
-        logger.warning("Cloudflare Workers AI call failed (%s); falling back to canned message.", e)
-        return None
+    last_status: Optional[int] = None
+    attempts = max(1, CLOUDFLARE_MAX_RETRIES + 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=CLOUDFLARE_AI_TIMEOUT_SECONDS) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                if resp.status_code in RETRYABLE_STATUS_CODES:
+                    last_status = resp.status_code
+                    logger.warning(
+                        "Cloudflare Workers AI retryable status %s (attempt %d/%d).",
+                        resp.status_code, attempt, attempts,
+                    )
+                else:
+                    # Non-retryable path: raise for 4xx (401 etc.) / succeed on 2xx.
+                    resp.raise_for_status()
+                    data = resp.json()
+                    # Contract: {"result": {"response": "..."}, "success": true, ...}
+                    result = data.get("result") or {}
+                    text = (result.get("response") or "").strip() if isinstance(result, dict) else ""
+                    return text or None
+        except CloudflareRateLimitExhausted:
+            raise
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status in RETRYABLE_STATUS_CODES:
+                last_status = status
+                logger.warning(
+                    "Cloudflare Workers AI retryable HTTP %s (attempt %d/%d).",
+                    status, attempt, attempts,
+                )
+            else:
+                # e.g. 401 invalid token → fallback regression: no retry.
+                logger.warning("Cloudflare Workers AI call failed (%s); falling back to canned message.", e)
+                return None
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
+            last_status = last_status  # transport failure: retryable, not a 429
+            logger.warning(
+                "Cloudflare Workers AI transport error (%s, attempt %d/%d); retrying.",
+                e, attempt, attempts,
+            )
+        except Exception as e:
+            logger.warning("Cloudflare Workers AI call failed (%s); falling back to canned message.", e)
+            return None
+
+        if attempt < attempts:
+            backoff = CLOUDFLARE_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            await asyncio.sleep(backoff)
+
+    # Retries exhausted.
+    if last_status == 429:
+        # Mapped by the API layer to a safe HTTP 503 (no provider internals).
+        raise CloudflareRateLimitExhausted(
+            f"Cloudflare rate limit (429) persisted after {attempts} attempts."
+        )
+    logger.warning(
+        "Cloudflare Workers AI retries exhausted (last_status=%s); falling back to canned message.",
+        last_status,
+    )
+    return None
 
 
 async def generate_tutor_feedback(
@@ -166,6 +245,10 @@ async def generate_tutor_feedback(
       "generated_at": float (unix timestamp),
       "latency_ms": int (ttfb of the LLM call; ~0 for fallback)
     }
+
+    Raises CloudflareRateLimitExhausted when retries are exhausted and the
+    last provider failure was a 429, so the API layer can map it to a safe
+    HTTP 503. All other provider failures degrade to a canned fallback.
     """
     prompt = _build_prompt(emotion, confidence, trend, lang)
     start = time.perf_counter()

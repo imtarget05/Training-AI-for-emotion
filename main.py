@@ -28,7 +28,11 @@ from database import (
     get_tutor_feedback_history,
 )
 from model import get_model_info, load_model, predict_image, predict_frame
-from tutor import generate_tutor_feedback
+from tutor import (
+    CloudflareRateLimitExhausted,
+    FALLBACK_MESSAGES_VI,
+    generate_tutor_feedback,
+)
 from tutor_trigger import (
     update_streak_and_should_trigger,
     recent_emotion_trend,
@@ -174,7 +178,10 @@ async def predict(
     except Exception as e:
         print("⚠️ Failed to save prediction to DB:", e)
 
-    # AI Tutor: chỉ trigger khi cảm xúc "cần hỗ trợ" lặp lại liên tiếp
+    # AI Tutor: chỉ trigger khi cảm xúc "cần hỗ trợ" lặp lại liên tiếp.
+    # Reliability (§6): prediction luôn 200 — exhausted-429 ở background path
+    # degrade thành fallback rate_limited (không vỡ prediction); chỉ endpoint
+    # on-demand /tutor/feedback mới trả 503.
     if _update_streak_and_should_trigger(device_id, result["label"]):
         try:
             trend = _recent_emotion_trend(device_id)
@@ -194,6 +201,21 @@ async def predict(
             print(f"🤖 AI Tutor triggered [{device_id}] "
                   f"emotion={feedback['emotion']} source={feedback['source']} "
                   f"latency={feedback.get('latency_ms', '?')}ms")
+        except CloudflareRateLimitExhausted:
+            # Safe degradation: prediction stays 200, tutor part signals retryable.
+            fallback_msg = FALLBACK_MESSAGES_VI.get(
+                result["label"],
+                "Cứ từ từ nhé, mình luôn ở đây nếu bạn cần hỗ trợ.",
+            )
+            wrapped["tutor_feedback"] = {
+                "message": fallback_msg,
+                "source": "fallback",
+                "emotion": result["label"],
+                "rate_limited": True,
+                "retryable": True,
+            }
+            print(f"⏳ Tutor rate-limited [{device_id}] emotion={result['label']} "
+                  f"→ fallback (prediction unaffected).")
         except Exception as e:
             print("⚠️ Tutor feedback generation failed:", e)
 
@@ -309,6 +331,18 @@ async def websocket_camera(websocket: WebSocket):
                                 f"source={feedback['source']} "
                                 f"latency={feedback.get('latency_ms', '?')}ms"
                             )
+                        except CloudflareRateLimitExhausted:
+                            response["tutor_feedback"] = {
+                                "message": FALLBACK_MESSAGES_VI.get(
+                                    top_emotion,
+                                    "Cứ từ từ nhé, mình luôn ở đây nếu bạn cần hỗ trợ.",
+                                ),
+                                "source": "fallback",
+                                "emotion": top_emotion,
+                                "rate_limited": True,
+                                "retryable": True,
+                            }
+                            print("⏳ Tutor rate-limited [webcam] → fallback (stream unaffected).")
                         except Exception as e:
                                 print("⚠️ Tutor feedback generation failed:", e)
 
@@ -444,14 +478,25 @@ async def tutor_feedback_on_demand(req: TutorFeedbackRequest):
     """
     Sinh feedback AI Tutor theo yêu cầu (vd: nút "Gợi ý" trên dashboard),
     độc lập với cơ chế sustained-streak dùng trong /predict và WebSocket.
+
+    Reliability (§6): exhausted-429 sau retry được map thành HTTP 503 safe
+    (không lộ provider internals); các lỗi provider khác degrade về
+    fallback 200.
     """
     trend = _recent_emotion_trend(req.device_id)
-    feedback = await generate_tutor_feedback(
-        emotion=req.emotion,
-        confidence=req.confidence,
-        trend=trend,
-        lang=req.lang,
-    )
+    try:
+        feedback = await generate_tutor_feedback(
+            emotion=req.emotion,
+            confidence=req.confidence,
+            trend=trend,
+            lang=req.lang,
+        )
+    except CloudflareRateLimitExhausted:
+        # Safe 503: retryable, no provider internals in the body.
+        raise HTTPException(
+            status_code=503,
+            detail="Tutor temporarily unavailable due to provider rate limit. Please retry shortly.",
+        )
     # DB write must never break feedback delivery (same isolation principle as
     # the CV pipeline: a downstream failure never fails the request).
     try:
