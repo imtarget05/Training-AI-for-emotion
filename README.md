@@ -160,8 +160,8 @@ Production runs on Neon PostgreSQL. Core tables:
 | Docker | ✅ Dockerfile + docker-compose.yml; running in production on Render |
 | Testing | ✅ pytest suite (see §9 Testing below) run manually before push |
 | Model metadata | ✅ `model_metadata.json` + `GET /info` endpoint |
-| MLflow | ⚠️ Setup **verification scripts only** (`scripts/_verify_mlflow.py`, `_verify_mlflow_container.py`); the training pipeline that would emit MLflow runs is not part of this repo |
-| CI | ❌ No CI pipeline (no GitHub Actions workflow) — run `pytest tests/` manually |
+| MLflow | ✅ Evaluation tracking integrated in `evaluate.py`: every `eval` run logs params (model, weights, dataset) + metrics (accuracy, macro-F1) + confusion-matrix artifact to the MLflow store (`MLFLOW_TRACKING_URI`, default SQLite); plus container verification scripts (`scripts/_verify_mlflow*.py`) |
+| CI | ✅ GitHub Actions (`.github/workflows/ci.yml`): unit/integration tests + metadata check on every push/PR to `main` |
 | CD | ✅ GitHub push → Render auto-deploy (`render.yaml`, `autoDeploy: yes`) |
 
 ## 9. Testing

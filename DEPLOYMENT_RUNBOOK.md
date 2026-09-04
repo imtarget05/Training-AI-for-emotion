@@ -6,9 +6,8 @@
 > free tier, Docker runtime, region Singapore). Database: Neon PostgreSQL.
 > AI Tutor: Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct`).
 >
-> Deployment automation: **GitHub push → Render auto-deploy** (CD). There is no
-> CI pipeline (no GitHub Actions workflow) in this repository; run
-> `pytest tests/` manually before pushing.
+> Deployment automation: **GitHub Actions CI (pytest) → GitHub push → Render
+> auto-deploy (CD)**. See `.github/workflows/ci.yml`.
 
 ## 0. Non-negotiable rules
 
