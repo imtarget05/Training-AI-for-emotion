@@ -97,7 +97,7 @@ Modules:
 > this repo**; the weights came from an earlier training run. `evaluate.py`
 > therefore validates inference (`sanity`) and reproduces metrics (`eval`)
 > honestly whenever a labeled dataset is supplied — nothing is fabricated
-> (see [Testing](#8-testing) and `VALIDATION_REPORT.md`).
+> (see [Testing](#8-testing) — metrics below are reproducible via `evaluate.py`).
 
 ## 4. Real-time pipeline
 
@@ -167,8 +167,7 @@ never requires a developer's GPU or local model weights (they are stubbed at
 the import boundary in `tests/conftest.py`).
 ## 9. ML metrics
 
-Only values that can actually be reproduced/measured are reported here
-(full evidence in `VALIDATION_REPORT.md`):
+Only values that can actually be reproduced/measured are reported here:
 
 | Metric | Value | Source |
 |---|---|---|
@@ -179,8 +178,7 @@ Only values that can actually be reproduced/measured are reported here
 | Strongest class | Happiness F1=0.725; Surprise F1=0.621 | per-class report |
 | Weakest class | Fear recall=0.046 (almost never predicted) | per-class report |
 
-Full per-class P/R/F1 table + confusion matrix: `VALIDATION_REPORT.md`,
-`image/eval_report.png`. Evaluation protocol: FER2013 public test split,
+Full per-class P/R/F1 table + confusion matrix: `image/eval_report.png`. Evaluation protocol: FER2013 public test split,
 224×224 RGB center-resize, ImageNet normalization, full-image (pre-cropped
 faces), batch of one on CPU. The model is below the FER2013
 human-agreement ceiling (~65 %); metrics are reported as measured — see
@@ -257,19 +255,14 @@ docker compose up --build
 python scripts/demo_e2e.py --base http://localhost:8000
 ```
 
-### Portfolio / interview pack
+### Project documentation
 
 | Doc | Purpose |
 |---|---|
-| `PORTFOLIO_SUMMARY.md` | One-liner, resume bullets, metrics, 30-sec architecture pitch |
-| `INTERVIEW_PREPARATION.md` | 20-question answer bank (ML, GenAI, MLOps, behavior) |
-| `PROJECT_PRESENTATION.md` | 3–5 min talk track + demo script + limitations slide |
 | `DEMO_SCRIPT.md` | Step-by-step live / fallback demo scenarios |
-| `VALIDATION_REPORT.md` | Full evidence: metrics, tests, MLflow, deps |
-| `CLOUD_LLM_VALIDATION_REPORT.md` | Real Cloudflare Workers AI 8-case matrix |
-| `FINAL_REPOSITORY_AUDIT.md` | Architecture + known limits audit |
 | `DATASET.md` | FER2013 provenance, mapping, conversion |
 | `DEPLOYMENT_RUNBOOK.md` | Operator steps: Neon → Koyeb → Pages → live checks |
+| `COST_MODEL.md` | Infrastructure cost model |
 ## 11. Limitations
 
 * Emotion recognition is **probabilistic**; a facial expression is not proof
